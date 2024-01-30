@@ -18,6 +18,7 @@
 ## 3.1) MultiDomain Image-to-Image Translation
 - $x$: Source domain image.
 - $y$: Target domain image.
-- $c$: Randomly generated target domain label.
+- $c$: (Randomly generated) target domain label.
+- $c'$: Source domain.
 $$G(x, c) \rightarrow y$$
 - $D_{\text{src}}(x)$: Probability distribution over sources.

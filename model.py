@@ -3,13 +3,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class GConvBlock(nn.Module):
+class ConvBlock(nn.Module):
     def __init__(
-        self, in_channels, out_channels, kernel_size, stride, padding, activ, upsample=False,
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        activ,
+        upsample=False,
+        normalize=True,
     ):
         super().__init__()
 
         self.activ = activ
+        self.normalize = normalize
 
         if upsample:
             conv_layer = nn.ConvTranspose2d
@@ -21,18 +30,24 @@ class GConvBlock(nn.Module):
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
-            bias=False,
+            bias=False if normalize else True,
         )
-        # "We use instance normalization for the generator."
-        self.norm = nn.InstanceNorm2d(out_channels, affine=False, track_running_stats=False)
+        if normalize:
+            # "We use instance normalization for the generator."
+            self.norm = nn.InstanceNorm2d(out_channels, affine=False, track_running_stats=False)
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.norm(x)
+        if self.normalize:
+            x = self.norm(x)
+
         if self.activ == "relu":
             x = torch.relu(x)
         elif self.activ == "tanh":
             x = torch.tanh(x)
+        elif self.activ == "leaky_relu":
+            # "We use Leaky ReLU with a negative slope of 0.01."
+            x = F.leaky_relu(x, negative_slope=0.01)
         return x
 
 
@@ -40,7 +55,7 @@ class ResBlock(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.conv = GConvBlock(
+        self.conv = ConvBlock(
             256, 256, kernel_size=3, stride=1, padding=1, activ="relu",
         )
 
@@ -49,33 +64,77 @@ class ResBlock(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, n_domains):
+    def __init__(self, dom_dim):
         super().__init__()
 
         # "StarGAN has the generator network composed of two convolutional layers
         # with the stride size of two for downsampling, six residual blocks, and two
         # transposed convolutional layers with the stride size of two for upsampling."
-        self.in_layer = GConvBlock(
-            n_domains + 2, 64, kernel_size=7, stride=1, padding=3, activ="relu", upsample=False,
+        self.in_layer = ConvBlock(
+            dom_dim + 3,
+            64,
+            kernel_size=7,
+            stride=1,
+            padding=3,
+            activ="relu",
+            upsample=False,
+            normalize=True,
         )
-        self.downsample1 = GConvBlock(
-            64, 128, kernel_size=4, stride=2, padding=1, activ="relu", upsample=False,
+        self.downsample1 = ConvBlock(
+            64,
+            128,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="relu",
+            upsample=False,
+            normalize=True,
         )
-        self.downsample2 = GConvBlock(
-            128, 256, kernel_size=4, stride=2, padding=1, activ="relu", upsample=False,
+        self.downsample2 = ConvBlock(
+            128,
+            256,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="relu",
+            upsample=False,
+            normalize=True,
         )
         self.bottleneck = nn.Sequential(*[ResBlock() for _ in range(6)])
-        self.upsample1 = GConvBlock(
-            256, 128, kernel_size=4, stride=2, padding=1, activ="relu", upsample=True,
+        self.upsample1 = ConvBlock(
+            256,
+            128,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="relu",
+            upsample=True,
+            normalize=True,
         )
-        self.upsample2 = GConvBlock(
-            128, 64, kernel_size=4, stride=2, padding=1, activ="relu", upsample=True,
+        self.upsample2 = ConvBlock(
+            128,
+            64,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="relu",
+            upsample=True,
+            normalize=True,
         )
-        self.out_layer = GConvBlock(
-            64, 3, kernel_size=7, stride=1, padding=3, activ="tanh", upsample=True,
+        self.out_layer = ConvBlock(
+            64,
+            3,
+            kernel_size=7,
+            stride=1,
+            padding=3,
+            activ="tanh",
+            upsample=True,
+            normalize=True,
         )
 
-    def forward(self, x):
+    def forward(self, src_image, trg_dom):
+        _, _, h, w = src_image.shape
+        x = torch.cat([src_image, trg_dom[..., None, None].repeat(1, 1, h, w)], dim=1)
         x = self.in_layer(x)
         x = self.downsample1(x)
         x = self.downsample2(x)
@@ -86,34 +145,91 @@ class Generator(nn.Module):
         return x
 
 
-class DConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
-        super().__init__()
-
-        self.conv = nn.Conv2d(
-            in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=True,
-        )
-
-    def forward(self, x):
-        x = self.conv(x)
-        # "We use Leaky ReLU with a negative slope of 0.01."
-        x = F.leaky_relu(x, negative_slope=0.01) 
-        return x
-
-
 class Discriminator(nn.Module):
     # "We use no normalization for the discriminator."
-    def __init__(self, n_domains):
+    def __init__(self, dom_dim):
         super().__init__()
 
-        self.conv_block1 = DConvBlock(3, 64, kernel_size=4, stride=2, padding=1)
-        self.conv_block2 = DConvBlock(64, 128, kernel_size=4, stride=2, padding=1)
-        self.conv_block3 = DConvBlock(128, 256, kernel_size=4, stride=2, padding=1)
-        self.conv_block4 = DConvBlock(256, 512, kernel_size=4, stride=2, padding=1)
-        self.conv_block5 = DConvBlock(512, 1024, kernel_size=4, stride=2, padding=1)
-        self.conv_block6 = DConvBlock(1024, 2048, kernel_size=4, stride=2, padding=1)
-        self.src_out = DConvBlock(2048, 1, kernel_size=3, stride=1, padding=1)
-        self.cls_out = DConvBlock(2048, n_domains, kernel_size=2, stride=1, padding=0)
+        self.conv_block1 = ConvBlock(
+            3,
+            64,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.conv_block2 = ConvBlock(
+            64,
+            128,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.conv_block3 = ConvBlock(
+            128,
+            256,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.conv_block4 = ConvBlock(
+            256,
+            512,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.conv_block5 = ConvBlock(
+            512,
+            1024,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.conv_block6 = ConvBlock(
+            1024,
+            2048,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.src_out = ConvBlock(
+            2048,
+            1,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
+        self.cls_out = ConvBlock(
+            2048,
+            dom_dim,
+            kernel_size=2,
+            stride=1,
+            padding=0,
+            activ="leaky_relu",
+            upsample=False,
+            normalize=False,
+        )
 
     def forward(self, x):
         x = self.conv_block1(x)
@@ -124,19 +240,25 @@ class Discriminator(nn.Module):
         x = self.conv_block6(x)
         x_src = self.src_out(x)
         x_cls = self.cls_out(x)
-        return x_src.mean(dim=(1, 2, 3)), x_cls # We leverage PatchGANs."
+        return x_src.mean(dim=(1, 2, 3)), x_cls.squeeze() # We leverage PatchGANs."
 
 
 if __name__ == "__main__":
     img_size = 128
-    n_domains = 12
-
-    x = torch.randn(2, n_domains + 2, img_size, img_size)
-    gen = Generator(n_domains=n_domains)
-    out = gen(x)
-    print(out.shape)
+    src_image = torch.randn(2, 3, img_size, img_size)
+    dom_dim = 17
+    trg_dom = torch.randn(2, dom_dim)
+    G = Generator(dom_dim=dom_dim)
+    out = G(src_image=src_image, trg_dom=trg_dom)
     
     x = torch.randn(2, 3, img_size, img_size)
-    disc = Discriminator(n_domains=n_domains)
-    src_out, cls_out = disc(x)
+    D = Discriminator(dom_dim=dom_dim)
+    src_out, cls_out = D(x)
     print(src_out.shape, cls_out.shape)
+
+    # "We use an $n$-dimensional one-hot vector to represent $m$, with $n$ being the number of datasets."
+    batch_size = 4
+    n_datasets = 2
+    m = torch.randn((batch_size, n_datasets))
+
+    # "We randomly generate the target domain label c so that G learns to flexibly translate the input image. We"
