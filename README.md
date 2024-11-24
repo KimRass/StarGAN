@@ -5,7 +5,7 @@
 - Multi-domain image-to-image translation: We change images according to attributes from multiple domains.
 - Training multiple domains from different datasets is possible, such as jointly training CelebA and RaFD images to change a CelebA image’s facial expression using features learned by training on RaFD.
 - 현존 모델들의 문제점:
-    - $k$개의 Domain이 있을 때 $_{k}P_{2}$개의 모델이 필요합니다.
+    - $k$개의 Domain이 있을 때 ${}_{k}P_{2}$개의 모델이 필요합니다.
     - 전체 Domain에 대한 공통된 Features가 있다고 하더라고 2개의 Domain으로부터밖에 학습이 불가합니다.
 - 모델은 Domain의 정보를 One-hot encoded label로서 받아들입니다. 학습 중에는 Target domain label을 무작위로 정하고 그 Domain으로 이미지를 번역하도록 모델이 학습됩니다.
 - Adding a mask vector to the domain label:

@@ -146,7 +146,9 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    # "We use no normalization for the discriminator."
+    """
+    "We use no normalization for the discriminator."
+    """
     def __init__(self, dom_dim):
         super().__init__()
 
